@@ -1,8 +1,24 @@
 import { useState } from "react";
-import { TrendingUp, Search, ExternalLink, Users, Filter } from "lucide-react";
+import { TrendingUp, Search, ExternalLink, Users, Filter, Sparkles, Lightbulb, Loader, Wand2, X } from "lucide-react";
 import type { ChannelData } from "../hooks/useChannels";
 import { searchYouTube, getChannelByHandle } from "../services/youtube";
 import type { SearchResult, ChannelStats } from "../services/youtube";
+
+const SERVER = import.meta.env.VITE_SERVER_URL || "http://localhost:3001";
+
+interface BigIdea {
+  title: string;
+  hook: string;
+  angle: string;
+  why: string;
+  format: "short" | "long";
+}
+
+const CHANNEL_ID_MAP: Record<string, string> = {
+  gurulandiarecords: "gurulandia",
+  HVMANnw: "hvman",
+  "MoneyCraft-y8w": "moneycraft",
+};
 
 const COMPETITORS: Record<string, { handle: string; label: string }[]> = {
   gurulandiarecords: [
@@ -98,6 +114,38 @@ export default function Trending({ channels }: Props) {
   const [activeChannelIdx, setActiveChannelIdx] = useState(0);
   const [compData, setCompData] = useState<Record<string, ChannelStats | null>>({});
   const [compLoading, setCompLoading] = useState<Record<string, boolean>>({});
+  // Big Ideas
+  const [ideas, setIdeas] = useState<BigIdea[]>([]);
+  const [patterns, setPatterns] = useState<string[]>([]);
+  const [ideasLoading, setIdeasLoading] = useState(false);
+  const [ideasError, setIdeasError] = useState("");
+  const [showIdeas, setShowIdeas] = useState(false);
+
+  const generateIdeas = async () => {
+    if (results.length === 0) return;
+    setShowIdeas(true); setIdeasLoading(true); setIdeasError(""); setIdeas([]); setPatterns([]);
+    try {
+      const r = await fetch(`${SERVER}/api/ideas/generate`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: CHANNEL_ID_MAP[activeChannel?.handle] || "gurulandia",
+          niche: activeNiche.label,
+          videos: results.map(r => ({ title: r.title, channel: r.channelTitle, views: r.viewCount })),
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error);
+      setIdeas(data.ideas || []);
+      setPatterns(data.patterns || []);
+    } catch (e) { setIdeasError(e instanceof Error ? e.message : "Errore"); }
+    setIdeasLoading(false);
+  };
+
+  // Manda l'idea al Video Studio (seed via localStorage, lo Studio lo legge all'avvio)
+  const sendToStudio = (idea: BigIdea) => {
+    localStorage.setItem("studio_seed_idea", idea.hook ? `${idea.title}. ${idea.angle}` : idea.title);
+    window.dispatchEvent(new CustomEvent("tubecommand:goto", { detail: "studio" }));
+  };
 
   const activeNiche = NICHES[activeChannelIdx];
   const activeChannel = channels[activeChannelIdx];
@@ -299,11 +347,65 @@ export default function Trending({ channels }: Props) {
 
           {!loading && results.length > 0 && (
             <div>
-              <div className="text-xs text-gray-500 mb-3 flex gap-3">
-                <span>Risultati: <span className="text-gray-300 font-medium">"{activeQuery}"</span></span>
-                {durFilter !== "any" && <span className="text-blue-400">· {DUR_LABELS[durFilter]}</span>}
-                <span className="text-gray-500">· {ORDER_LABELS[orderFilter]}</span>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-xs text-gray-500 flex gap-3">
+                  <span>Risultati: <span className="text-gray-300 font-medium">"{activeQuery}"</span></span>
+                  {durFilter !== "any" && <span className="text-blue-400">· {DUR_LABELS[durFilter]}</span>}
+                  <span className="text-gray-500">· {ORDER_LABELS[orderFilter]}</span>
+                </div>
+                <button onClick={generateIdeas} disabled={ideasLoading}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-gradient-to-r from-purple-600 to-pink-600 text-white disabled:opacity-50 hover:opacity-90 transition-all">
+                  {ideasLoading ? <Loader size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                  Genera Big Ideas
+                </button>
               </div>
+
+              {/* Pannello Big Ideas */}
+              {showIdeas && (
+                <div className="bg-gradient-to-br from-purple-500/10 to-pink-500/5 border border-purple-500/30 rounded-2xl p-5 mb-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2 text-white font-semibold">
+                      <Lightbulb size={16} className="text-purple-400" /> Big Ideas da questi virali
+                    </div>
+                    <button onClick={() => setShowIdeas(false)} className="text-gray-500 hover:text-white"><X size={15} /></button>
+                  </div>
+
+                  {ideasLoading && (
+                    <div className="flex items-center gap-2 text-gray-400 text-sm py-6 justify-center">
+                      <Loader size={14} className="animate-spin" /> Analizzo i pattern virali e genero idee…
+                    </div>
+                  )}
+                  {ideasError && <div className="text-red-400 text-sm">{ideasError}</div>}
+
+                  {!ideasLoading && patterns.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-4">
+                      {patterns.map((p, i) => (
+                        <span key={i} className="text-xs px-2.5 py-1 rounded-lg bg-purple-500/15 text-purple-200 border border-purple-500/20">{p}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  {!ideasLoading && ideas.length > 0 && (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                      {ideas.map((idea, i) => (
+                        <div key={i} className="bg-gray-900/70 border border-gray-800 rounded-xl p-3.5 flex flex-col gap-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="text-sm text-white font-semibold leading-snug">{idea.title}</div>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${idea.format === "short" ? "bg-pink-500/20 text-pink-300" : "bg-blue-500/20 text-blue-300"}`}>{idea.format}</span>
+                          </div>
+                          <div className="text-xs text-gray-400"><span className="text-gray-500">Hook:</span> "{idea.hook}"</div>
+                          <div className="text-xs text-gray-500">{idea.angle}</div>
+                          <div className="text-xs text-emerald-400/80 flex items-center gap-1"><TrendingUp size={11} /> {idea.why}</div>
+                          <button onClick={() => sendToStudio(idea)}
+                            className="mt-1 flex items-center justify-center gap-1.5 text-xs font-medium py-2 rounded-lg bg-purple-600 text-white hover:bg-purple-500 transition-all">
+                            <Wand2 size={12} /> Crea nel Video Studio
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="space-y-2">
                 {results.map((r, i) => (
                   <a

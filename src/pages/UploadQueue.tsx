@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { Upload, CheckCircle, AlertCircle, Loader, RefreshCw, FolderOpen, X, ChevronRight, Clock, Globe, Lock, Sparkles, Zap, Link } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Upload, CheckCircle, AlertCircle, Loader, RefreshCw, FolderOpen, X, ChevronRight, Clock, Globe, Lock, Sparkles, Zap, Link, CheckSquare, Square, FolderInput, Archive } from "lucide-react";
 import { generateTitleIdeas, generateSEOPackage } from "../services/ai";
 import type { SourceVideoContext } from "../services/ai";
 
@@ -67,6 +67,39 @@ function StatusBadge({ status, progress }: { status: VideoItem["status"]; progre
   return <div className="text-xs text-gray-500">In coda</div>;
 }
 
+// ── BADGE TIPO VIDEO (SHORT / LONG) — rilevato dal server, con cache ──────────
+const _typeCache: Record<string, "short" | "long"> = {};
+function TypeBadge({ channelId, filename }: { channelId: string; filename: string }) {
+  const key = `${channelId}/${filename}`;
+  const [type, setType] = useState<"short" | "long" | null>(_typeCache[key] || null);
+  useEffect(() => {
+    if (_typeCache[key]) { setType(_typeCache[key]); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const base = import.meta.env.VITE_SERVER_URL || "http://localhost:3001";
+        const res = await fetch(`${base}/api/video/meta?channel=${channelId}&filename=${encodeURIComponent(filename)}`);
+        if (res.ok && alive) {
+          const m = await res.json();
+          const t = m.type === "short" ? "short" : "long";
+          _typeCache[key] = t;
+          setType(t);
+        }
+      } catch { /* ignora */ }
+    })();
+    return () => { alive = false; };
+  }, [key, channelId, filename]);
+  if (!type) return null;
+  const isShort = type === "short";
+  const col = isShort ? "#ef4444" : "#3b82f6";
+  return (
+    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+      style={{ background: col + "22", color: col }}>
+      {isShort ? "SHORT" : "LONG"}
+    </span>
+  );
+}
+
 // ── UPLOAD DRAWER ─────────────────────────────────────────────────────────────
 
 function UploadDrawer({
@@ -104,6 +137,25 @@ function UploadDrawer({
   const [sourceVideo, setSourceVideo] = useState<SourceVideoContext | null>(null);
   const [loadingSource, setLoadingSource] = useState(false);
   const [sourceError, setSourceError] = useState("");
+  const [videoType, setVideoType] = useState<"short" | "long" | "unknown">("unknown");
+  const [videoMeta, setVideoMeta] = useState<{ duration: number; width: number; height: number } | null>(null);
+
+  // Rileva automaticamente SHORT vs LONG (durata + formato) all'apertura
+  useEffect(() => {
+    (async () => {
+      try {
+        const base = import.meta.env.VITE_SERVER_URL || "http://localhost:3001";
+        const res = await fetch(`${base}/api/video/meta?channel=${channel.id}&filename=${encodeURIComponent(video.filename)}`);
+        if (res.ok) {
+          const m = await res.json();
+          setVideoMeta(m);
+          setVideoType(m.type === "short" ? "short" : "long");
+        }
+      } catch { /* ignora */ }
+    })();
+  }, [video.filename, channel.id]);
+
+  const fmtDur = (s: number) => s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : `${s}s`;
 
   const ANGLE_COLORS: Record<string, string> = {
     curiosity: "#3b82f6", howto: "#10b981",
@@ -126,8 +178,8 @@ function UploadDrawer({
     setLoadingTitles(true);
     setShowTitlePicker(false);
     try {
-      const ideas = await generateTitleIdeas(form.title, niche, "Italiano");
-      setTitleSuggestions(ideas.slice(0, 4));
+      const ideas = await generateTitleIdeas(form.title, niche, "Italiano", channel.id, videoType);
+      setTitleSuggestions(ideas.slice(0, 6));
       setShowTitlePicker(true);
     } catch {}
     setLoadingTitles(false);
@@ -152,7 +204,7 @@ function UploadDrawer({
     setLoadingSEO(true);
     setSeoError("");
     try {
-      const pkg = await generateSEOPackage(form.title, niche, "Italiano", sourceVideo || undefined, channel.id);
+      const pkg = await generateSEOPackage(form.title, niche, "Italiano", sourceVideo || undefined, channel.id, videoType);
       setForm(f => ({ ...f, description: pkg.description }));
     } catch (e) {
       setSeoError(e instanceof Error ? e.message : "Errore generazione SEO");
@@ -216,6 +268,32 @@ function UploadDrawer({
               </div>
             )}
             <div className="text-xs text-gray-600 mt-1.5">Facoltativo — migliora la descrizione SEO con il contesto dell'episodio originale</div>
+          </div>
+
+          {/* Tipo video: SHORT / LONG */}
+          <div>
+            <label className="text-xs text-gray-400 uppercase tracking-wider mb-2 block">Tipo video</label>
+            <div className="flex items-center gap-2">
+              {(["short", "long"] as const).map(t => {
+                const active = videoType === t;
+                const isShort = t === "short";
+                const col = isShort ? "#ef4444" : "#3b82f6";
+                return (
+                  <button key={t} onClick={() => setVideoType(t)}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl border text-xs font-semibold transition-all"
+                    style={active
+                      ? { background: col + "22", borderColor: col, color: col }
+                      : { borderColor: "#374151", color: "#6b7280" }}>
+                    {isShort ? "📱 SHORT" : "🎬 LONG"}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="text-xs text-gray-600 mt-1.5">
+              {videoMeta
+                ? `Rilevato: ${videoMeta.width}×${videoMeta.height} · ${fmtDur(videoMeta.duration)} — ${videoType === "short" ? "verticale ≤3 min" : "video intero"}. Puoi cambiarlo a mano.`
+                : "Rilevamento automatico in corso…"}
+            </div>
           </div>
 
           {/* Titolo */}
@@ -382,9 +460,194 @@ export default function UploadQueue() {
   const [authUrl, setAuthUrl] = useState("");
   const [callbackUrl, setCallbackUrl] = useState("");
   const [authError, setAuthError] = useState("");
+  // Selezione multipla + batch + scan
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchMsg, setBatchMsg] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [batching, setBatching] = useState(false);
+  const [addingFiles, setAddingFiles] = useState(false);
+  const [hasSpot, setHasSpot] = useState(false);
+  const [spotDur, setSpotDur] = useState(0);
+  const [attachingSpot, setAttachingSpot] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const spotInputRef = useRef<HTMLInputElement>(null);
+
+  const refreshSpot = useCallback(async () => {
+    try {
+      const r = await fetch(`${SERVER}/api/spot/status`);
+      const d = await r.json();
+      setHasSpot(!!d.hasSpot); setSpotDur(d.duration || 0);
+    } catch { /* server offline */ }
+  }, []);
+  useEffect(() => { refreshSpot(); }, [refreshSpot]);
+
+  const uploadSpot = async (file: File | undefined) => {
+    if (!file) return;
+    setBatchMsg("Caricamento spot…");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(`${SERVER}/api/spot/upload`, { method: "POST", body: fd });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      setBatchMsg("✓ Spot salvato. Ora puoi attaccarlo ai video selezionati.");
+      refreshSpot();
+    } catch (e) { setBatchMsg(e instanceof Error ? e.message : "Errore caricamento spot"); }
+    if (spotInputRef.current) spotInputRef.current.value = "";
+  };
+
+  const attachElementSelected = async () => {
+    const idle = queue.filter(v => selected.has(v.filename) && v.status === "idle");
+    if (idle.length === 0) return;
+    if (!confirm(`Aggiungere il bottone ISCRIVITI (al centro, ~2s con click) a ${idle.length} video? L'originale va in backup.`)) return;
+    setAttachingSpot(true);
+    let ok = 0; const failed: string[] = [];
+    for (let i = 0; i < idle.length; i++) {
+      const v = idle[i];
+      setBatchMsg(`Aggiungo ISCRIVITI ${i + 1}/${idle.length}: ${v.title}…`);
+      try {
+        const r = await fetch(`${SERVER}/api/element/attach`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channel: activeChannel, filename: v.filename }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error);
+        ok++;
+      } catch (e) { failed.push(`${v.title} (${e instanceof Error ? e.message : "errore"})`); }
+    }
+    setBatchMsg(failed.length ? `Elemento aggiunto a ${ok}/${idle.length}. Falliti: ${failed.join("; ")}` : `✓ Bottone ISCRIVITI aggiunto a ${ok} video.`);
+    setSelected(new Set());
+    fetchQueue(activeChannel);
+    setAttachingSpot(false);
+  };
+
+  const attachSpotSelected = async () => {
+    const idle = queue.filter(v => selected.has(v.filename) && v.status === "idle");
+    if (idle.length === 0) return;
+    if (!hasSpot) { setBatchMsg("Carica prima uno spot."); return; }
+    if (!confirm(`Attaccare lo spot in coda a ${idle.length} video? L'originale di ognuno viene salvato in backup (.originali_pre_spot).`)) return;
+    setAttachingSpot(true);
+    let ok = 0; const failed: string[] = [];
+    for (let i = 0; i < idle.length; i++) {
+      const v = idle[i];
+      setBatchMsg(`Montaggio spot ${i + 1}/${idle.length}: ${v.title}…`);
+      try {
+        const r = await fetch(`${SERVER}/api/spot/attach`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ channel: activeChannel, filename: v.filename }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error);
+        ok++;
+      } catch (e) { failed.push(`${v.title} (${e instanceof Error ? e.message : "errore"})`); }
+    }
+    setBatchMsg(failed.length ? `Spot attaccato a ${ok}/${idle.length}. Falliti: ${failed.join("; ")}` : `✓ Spot attaccato a ${ok} video.`);
+    setSelected(new Set());
+    fetchQueue(activeChannel);
+    setAttachingSpot(false);
+  };
 
   const channel = channels.find(c => c.id === activeChannel);
   const chColor = CHANNEL_COLORS[activeChannel] || COLOR;
+
+  const toggleSel = (fn: string) => setSelected(prev => {
+    const n = new Set(prev); n.has(fn) ? n.delete(fn) : n.add(fn); return n;
+  });
+
+  const scanInbox = async () => {
+    setScanning(true); setBatchMsg("");
+    try {
+      const r = await fetch(`${SERVER}/api/queue/scan?channel=${activeChannel}`, { method: "POST" });
+      const d = await r.json();
+      setBatchMsg(d.count ? `Importati ${d.count} video da Inbox/${activeChannel}` : `Nessun video in Inbox/${activeChannel}`);
+      fetchQueue(activeChannel); fetchChannels();
+    } catch { setBatchMsg("Errore scan"); }
+    setScanning(false);
+  };
+
+  // Carica UN file con XMLHttpRequest (così vediamo la % e non cade in timeout come fetch)
+  const uploadOne = (file: File, onProgress: (pct: number) => void) => new Promise<void>((resolve, reject) => {
+    const fd = new FormData();
+    fd.append("channel", activeChannel);
+    fd.append("files", file);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${SERVER}/api/queue/add-files`);
+    if (SERVER.includes("ngrok")) xhr.setRequestHeader("ngrok-skip-browser-warning", "true");
+    xhr.timeout = 30 * 60 * 1000; // 30 min: i file grandi via tunnel sono lenti
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100)); };
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error(`HTTP ${xhr.status}`));
+    xhr.onerror = () => reject(new Error("connessione interrotta"));
+    xhr.ontimeout = () => reject(new Error("timeout (file troppo grande per il tunnel)"));
+    xhr.send(fd);
+  });
+
+  const addFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    const videos = [...fileList].filter(f => /\.(mp4|mov|mkv|webm|m4v)$/i.test(f.name));
+    if (!videos.length) { setBatchMsg("Nessun file video selezionato (formati: mp4, mov, mkv, webm)"); return; }
+    setAddingFiles(true);
+    let ok = 0; const failed: string[] = [];
+    for (let i = 0; i < videos.length; i++) {
+      const f = videos[i];
+      const mb = (f.size / 1024 / 1024).toFixed(0);
+      try {
+        await uploadOne(f, pct => setBatchMsg(`Caricamento ${i + 1}/${videos.length}: ${f.name} (${mb} MB) — ${pct}%`));
+        ok++;
+        fetchQueue(activeChannel); // aggiorna la coda man mano
+      } catch (e) {
+        failed.push(`${f.name} (${e instanceof Error ? e.message : "errore"})`);
+      }
+    }
+    setBatchMsg(
+      failed.length
+        ? `Aggiunti ${ok}/${videos.length}. Falliti: ${failed.join("; ")}`
+        : `✓ Aggiunti ${ok} video alla coda di ${activeChannel}.`
+    );
+    setAddingFiles(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (folderInputRef.current) folderInputRef.current.value = "";
+  };
+
+  const batchUpload = async (visibility: "public" | "private") => {
+    const idle = queue.filter(v => selected.has(v.filename) && v.status === "idle");
+    if (idle.length === 0) return;
+    setBatching(true); setBatchMsg("");
+    try {
+      const r = await fetch(`${SERVER}/api/upload/batch`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: activeChannel, visibility,
+          items: idle.map(v => ({ filename: v.filename, form: { title: v.title } })),
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      setBatchMsg(`${visibility === "private" ? "In bozze" : "Pubblicazione"}: ${idle.length} video avviati (vedi barra in alto)`);
+      setSelected(new Set());
+      setTimeout(() => fetchQueue(activeChannel), 1500);
+    } catch (e) { setBatchMsg(e instanceof Error ? e.message : "Errore batch"); }
+    setBatching(false);
+  };
+
+  const archiveSelected = async () => {
+    const idle = queue.filter(v => selected.has(v.filename) && v.status === "idle");
+    if (idle.length === 0) return;
+    if (!confirm(`Archiviare ${idle.length} video? Verranno TOLTI dalla coda (spostati in Posted/) SENZA caricarli su YouTube. I file restano sul Mac.`)) return;
+    setBatching(true); setBatchMsg("");
+    try {
+      const r = await fetch(`${SERVER}/api/queue/archive`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: activeChannel, filenames: idle.map(v => v.filename) }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      setBatchMsg(`Archiviati ${d.moved} video (tolti dalla coda, non caricati).`);
+      setSelected(new Set());
+      fetchQueue(activeChannel);
+    } catch (e) { setBatchMsg(e instanceof Error ? e.message : "Errore archiviazione"); }
+    setBatching(false);
+  };
 
   const fetchChannels = useCallback(async () => {
     try {
@@ -495,10 +758,46 @@ export default function UploadQueue() {
             <p className="text-gray-400 text-sm">{channel?.label || "…"} — video da pubblicare</p>
           </div>
         </div>
-        <button onClick={() => { fetchQueue(activeChannel); fetchChannels(); }}
-          className="flex items-center gap-2 text-xs text-gray-400 hover:text-white transition-colors px-3 py-2 rounded-lg hover:bg-gray-800">
-          <RefreshCw size={12} /> Aggiorna
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Input file nascosti */}
+          <input ref={fileInputRef} type="file" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v" multiple
+            style={{ display: "none" }} onChange={e => addFiles(e.target.files)} />
+          {/* @ts-expect-error webkitdirectory non è nei tipi standard */}
+          <input ref={folderInputRef} type="file" webkitdirectory="" directory="" multiple
+            style={{ display: "none" }} onChange={e => addFiles(e.target.files)} />
+          <input ref={spotInputRef} type="file" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v"
+            style={{ display: "none" }} onChange={e => uploadSpot(e.target.files?.[0])} />
+
+          <button onClick={() => spotInputRef.current?.click()}
+            className="flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg transition-all border"
+            style={{ borderColor: hasSpot ? "#10b981" : "#374151", color: hasSpot ? "#10b981" : "#9ca3af" }}
+            title={hasSpot ? `Spot caricato (${spotDur}s). Clicca per sostituirlo.` : "Carica lo spot da attaccare in coda ai video"}>
+            🎬 {hasSpot ? `Spot ok (${spotDur}s)` : "Carica spot"}
+          </button>
+
+          <button onClick={() => fileInputRef.current?.click()} disabled={addingFiles}
+            className="flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg transition-all disabled:opacity-50 text-white"
+            style={{ background: chColor }}
+            title="Carica uno o più video dal computer nella coda">
+            {addingFiles ? <Loader size={12} className="animate-spin" /> : <Upload size={12} />} Aggiungi video
+          </button>
+          <button onClick={() => folderInputRef.current?.click()} disabled={addingFiles}
+            className="flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg transition-all disabled:opacity-50"
+            style={{ background: chColor + "18", color: chColor, border: `1px solid ${chColor}44` }}
+            title="Carica un'intera cartella di video">
+            <FolderOpen size={12} /> Aggiungi cartella
+          </button>
+          <button onClick={scanInbox} disabled={scanning}
+            className="flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg transition-all disabled:opacity-50"
+            style={{ background: chColor + "18", color: chColor, border: `1px solid ${chColor}44` }}
+            title={`Importa i video lasciati in Inbox/${activeChannel}`}>
+            {scanning ? <Loader size={12} className="animate-spin" /> : <FolderInput size={12} />} Importa da Inbox
+          </button>
+          <button onClick={() => { fetchQueue(activeChannel); fetchChannels(); }}
+            className="flex items-center gap-2 text-xs text-gray-400 hover:text-white transition-colors px-3 py-2 rounded-lg hover:bg-gray-800">
+            <RefreshCw size={12} /> Aggiorna
+          </button>
+        </div>
       </div>
 
       {/* Channel tabs */}
@@ -570,9 +869,37 @@ export default function UploadQueue() {
       )}
 
       {serverOk === true && channel?.authenticated && (
-        <div className="flex items-center gap-2 text-green-400 text-xs mb-5">
-          <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-          Server attivo — {channel.label} connesso a YouTube
+        <div className="mb-5">
+          <div className="flex items-center gap-2 text-green-400 text-xs">
+            <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+            Server attivo — {channel.label} connesso a YouTube
+            {!authUrl && (
+              <button onClick={startAuth}
+                className="ml-2 text-[11px] px-2.5 py-1 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-800"
+                title="Riconnetti per attivare il permesso 'primo commento automatico'">
+                🔄 Riconnetti (per commenti)
+              </button>
+            )}
+          </div>
+          {authUrl && (
+            <div className="mt-2 space-y-2 bg-gray-800/50 border border-gray-700 rounded-xl p-3">
+              <div className="text-xs text-gray-400">
+                1. Si è aperta una finestra Google — accedi con l'account di <b className="text-white">{channel.label}</b> e clicca <b>Consenti</b> (vedrai il nuovo permesso commenti).<br />
+                2. Poi copia l'URL completo dalla barra del browser e incollalo qui:
+              </div>
+              <div className="flex gap-2">
+                <input value={callbackUrl} onChange={e => setCallbackUrl(e.target.value)}
+                  placeholder="http://localhost:2500/oauth/callback?code=..."
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-white text-xs focus:outline-none focus:border-gray-500" />
+                <button onClick={submitAuthCode} disabled={!callbackUrl.trim()}
+                  className="text-xs px-4 py-2 rounded-xl font-semibold disabled:opacity-40"
+                  style={{ background: chColor, color: "#fff" }}>
+                  Conferma
+                </button>
+              </div>
+              {authError && <div className="text-xs text-red-400">{authError}</div>}
+            </div>
+          )}
         </div>
       )}
 
@@ -592,6 +919,57 @@ export default function UploadQueue() {
         </div>
       )}
 
+      {batchMsg && (
+        <div className="text-xs text-gray-300 bg-gray-800/60 border border-gray-700 rounded-xl px-3 py-2 mb-3">{batchMsg}</div>
+      )}
+
+      {/* Barra selezione multipla / batch */}
+      {queue.some(v => v.status === "idle") && (
+        <div className="flex items-center gap-3 mb-3 flex-wrap">
+          <button onClick={() => {
+            const idleFn = queue.filter(v => v.status === "idle").map(v => v.filename);
+            setSelected(prev => prev.size === idleFn.length ? new Set() : new Set(idleFn));
+          }}
+            className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white px-2 py-1.5 rounded-lg hover:bg-gray-800">
+            {selected.size > 0 && selected.size === queue.filter(v => v.status === "idle").length
+              ? <CheckSquare size={14} /> : <Square size={14} />}
+            Seleziona tutti
+          </button>
+          {selected.size > 0 && (
+            <>
+              <span className="text-xs text-gray-500">{selected.size} selezionati</span>
+              <button onClick={() => batchUpload("private")} disabled={batching || !channel?.authenticated}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-gray-700 text-white hover:bg-gray-600 disabled:opacity-40">
+                <Lock size={12} /> Metti in bozze ({selected.size})
+              </button>
+              <button onClick={() => batchUpload("public")} disabled={batching || !channel?.authenticated}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg text-white disabled:opacity-40"
+                style={{ background: chColor }}>
+                <Globe size={12} /> Pubblica ({selected.size})
+              </button>
+              <button onClick={attachSpotSelected} disabled={attachingSpot || !hasSpot}
+                title={hasSpot ? "Attacca lo spot in coda ai video selezionati (dissolvenza)" : "Carica prima uno spot"}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border disabled:opacity-40"
+                style={{ borderColor: "#10b981", color: "#10b981" }}>
+                {attachingSpot ? <Loader size={12} className="animate-spin" /> : "🎬"} Attacca spot ({selected.size})
+              </button>
+              <button onClick={attachElementSelected} disabled={attachingSpot}
+                title="Aggiunge il bottone ISCRIVITI al centro (~2s con click)"
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border disabled:opacity-40"
+                style={{ borderColor: "#ef4444", color: "#ef4444" }}>
+                🔔 ISCRIVITI ({selected.size})
+              </button>
+              <button onClick={archiveSelected} disabled={batching}
+                title="Toglie dalla coda senza caricare (per video già su YouTube)"
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-700 disabled:opacity-40">
+                <Archive size={12} /> Già su YouTube ({selected.size})
+              </button>
+              <button onClick={() => setSelected(new Set())} className="text-xs text-gray-500 hover:text-white">Deseleziona</button>
+            </>
+          )}
+        </div>
+      )}
+
       {/* List */}
       {loading ? (
         <div className="flex items-center justify-center py-20 gap-3">
@@ -608,15 +986,24 @@ export default function UploadQueue() {
           {queue.map((v, i) => (
             <div key={v.filename}
               className="bg-gray-900 border border-gray-800 hover:border-gray-700 rounded-2xl p-4 flex items-center gap-4 transition-all group"
-              style={v.status === "uploading" ? { borderColor: "#3b82f666" } : {}}
+              style={v.status === "uploading" ? { borderColor: "#3b82f666" } : selected.has(v.filename) ? { borderColor: chColor + "88" } : {}}
             >
+              {v.status === "idle" && (
+                <button onClick={() => toggleSel(v.filename)} className="flex-shrink-0 text-gray-500 hover:text-white"
+                  style={selected.has(v.filename) ? { color: chColor } : {}}>
+                  {selected.has(v.filename) ? <CheckSquare size={18} /> : <Square size={18} />}
+                </button>
+              )}
               <div className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0"
                 style={{ background: chColor + "22", color: chColor }}>
                 {i + 1}
               </div>
 
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-white truncate">{v.title}</div>
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="text-sm font-medium text-white truncate">{v.title}</div>
+                  <TypeBadge channelId={activeChannel} filename={v.filename} />
+                </div>
                 <div className="text-xs text-gray-500 mt-0.5">{v.sizeMb} MB</div>
                 {v.status === "uploading" && (
                   <div className="mt-2 w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">

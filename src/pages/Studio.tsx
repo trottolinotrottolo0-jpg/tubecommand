@@ -97,9 +97,15 @@ function StepBar({ step, maxStep, onStep }: { step: number; maxStep: number; onS
 // ─── PHASE 1: SCRIPT ─────────────────────────────────────────────────────────
 
 function ScriptPhase({ onDone, brollFetching, existing }: { onDone: (d: ScriptData) => void; brollFetching?: boolean; existing?: ScriptData | null }) {
-  const [idea, setIdea] = useState("");
+  // Seed da "Big Ideas" (Trending → Crea nel Video Studio)
+  const [idea, setIdea] = useState(() => {
+    const seed = typeof localStorage !== "undefined" ? localStorage.getItem("studio_seed_idea") : null;
+    if (seed) localStorage.removeItem("studio_seed_idea");
+    return seed || "";
+  });
   const [style, setStyle] = useState("progetto_happiness");
   const [customStyle, setCustomStyle] = useState("");
+  const [facts, setFacts] = useState("");
   const [duration, setDuration] = useState(45);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -112,7 +118,7 @@ function ScriptPhase({ onDone, brollFetching, existing }: { onDone: (d: ScriptDa
       const r = await fetch(`${SERVER}/api/studio/script`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, style, customStyle, targetDuration: duration }),
+        body: JSON.stringify({ idea, style, customStyle, targetDuration: duration, facts }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error);
@@ -129,6 +135,15 @@ function ScriptPhase({ onDone, brollFetching, existing }: { onDone: (d: ScriptDa
           <textarea value={idea} onChange={e => setIdea(e.target.value)} rows={4}
             placeholder="Es: Come uscire dalla trappola finanziaria dei 20 anni..."
             className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-purple-500 resize-none" />
+        </div>
+
+        <div>
+          <label className="text-xs text-gray-400 uppercase tracking-wider mb-2 block flex items-center gap-2">
+            Fatti / punti chiave <span className="text-[10px] text-amber-400 normal-case">consigliato per temi informativi</span>
+          </label>
+          <textarea value={facts} onChange={e => setFacts(e.target.value)} rows={4}
+            placeholder="Incolla qui i fatti VERI (es. sui coccodrilli). L'AI scriverà lo script SOLO su questi, senza inventare. Lascia vuoto per farli generare all'AI (rischio imprecisioni)."
+            className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-amber-500 resize-none" />
         </div>
 
         <div>
@@ -610,10 +625,15 @@ const CAPTION_FONTS = [
 ];
 
 const CAPTION_EFFECTS = [
-  { id: "none",  label: "Nessuno" },
-  { id: "pop",   label: "Pop" },
-  { id: "fade",  label: "Fade" },
-  { id: "shake", label: "Shake" },
+  { id: "none",    label: "Nessuno" },
+  { id: "pop",     label: "Pop" },
+  { id: "fade",    label: "Fade" },
+  { id: "shake",   label: "Shake" },
+  { id: "bounce",  label: "Bounce" },
+  { id: "zoom",    label: "Zoom" },
+  { id: "tilt",    label: "Tilt" },
+  { id: "glow",    label: "Glow" },
+  { id: "slidein", label: "Slide" },
 ];
 
 const WORDS_OPTIONS = [
@@ -628,6 +648,10 @@ const CLIP_ANIMATIONS = [
   { id: "zoomin",   label: "Zoom in" },
   { id: "zoomout",  label: "Zoom out" },
   { id: "kenburns", label: "Ken Burns" },
+  { id: "panleft",  label: "Pan ←" },
+  { id: "panright", label: "Pan →" },
+  { id: "panup",    label: "Pan ↑" },
+  { id: "pulse",    label: "Pulse" },
   { id: "shake",    label: "Shake" },
 ];
 
@@ -668,7 +692,20 @@ function ExportPhase({ script, voiceoverFile, assignments, onBack }: {
   const [downloadUrl, setDownloadUrl] = useState("");
   const [streamUrl, setStreamUrl] = useState("");
   const [savedTo, setSavedTo] = useState("");
+  const [exportFilename, setExportFilename] = useState("");
+  const [queuedTo, setQueuedTo] = useState<string[]>([]);
   const [error, setError] = useState("");
+
+  const sendToQueue = async (chId: string) => {
+    if (!exportFilename) return;
+    try {
+      const r = await fetch(`${SERVER}/api/studio/to-queue`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: exportFilename, channel: chId, title: script.hook || script.segments[0]?.text || "Video" }),
+      });
+      if (r.ok) setQueuedTo(prev => [...prev, chId]);
+    } catch {}
+  };
   const [progress, setProgress] = useState(0);
   const [captions, setCaptions] = useState(true);
   const [captionStyle, setCaptionStyle] = useState("viral");
@@ -732,7 +769,7 @@ function ExportPhase({ script, voiceoverFile, assignments, onBack }: {
   const hlColor = captionStyle === "yellow" ? "#ffffff" : "#ffd400";
   const fontCss = CAPTION_FONTS.find(f => f.id === captionFont)?.css || "sans-serif";
   const previewFontSize = wordsPerCaption === 1 ? 26 : wordsPerCaption === 2 ? 22 : wordsPerCaption === 3 ? 19 : 17;
-  const fxClass = captionEffect === "pop" ? "cap-pop" : captionEffect === "fade" ? "cap-fade" : captionEffect === "shake" ? "cap-shake" : "";
+  const fxClass = captionEffect && captionEffect !== "none" ? `cap-${captionEffect}` : "";
 
   const doExport = async () => {
     setExporting(true); setError(""); setProgress(0);
@@ -770,6 +807,7 @@ function ExportPhase({ script, voiceoverFile, assignments, onBack }: {
             setDownloadUrl(job.result.url);
             setStreamUrl(job.result.streamUrl || "");
             setSavedTo(job.result.savedTo || "");
+            setExportFilename(job.result.filename || "");
             setExporting(false);
           } else if (job.status === "error") {
             clearInterval(poll);
@@ -803,7 +841,31 @@ function ExportPhase({ script, voiceoverFile, assignments, onBack }: {
           className="w-full py-4 rounded-xl font-bold bg-green-600 text-white flex items-center justify-center gap-2 hover:bg-green-500 transition-all">
           <Download size={16} /> Scarica Video MP4
         </a>
-        <button onClick={() => { setDownloadUrl(""); setStreamUrl(""); setProgress(0); }}
+
+        {/* Aggiungi alla coda di un canale */}
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-3.5">
+          <div className="text-xs text-gray-400 mb-2.5 text-center">Aggiungi alla coda di un canale</div>
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { id: "gurulandia", label: "Gurulandia", color: "#a855f7" },
+              { id: "hvman", label: "HVMAN", color: "#14b8a6" },
+              { id: "moneycraft", label: "Money Craft", color: "#eab308" },
+            ].map(c => {
+              const done = queuedTo.includes(c.id);
+              return (
+                <button key={c.id} onClick={() => sendToQueue(c.id)} disabled={done}
+                  className="py-2 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1 disabled:opacity-70"
+                  style={done
+                    ? { background: c.color + "22", color: c.color }
+                    : { background: c.color, color: "#000" }}>
+                  {done ? <><Check size={11} /> Aggiunto</> : c.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <button onClick={() => { setDownloadUrl(""); setStreamUrl(""); setProgress(0); setQueuedTo([]); }}
           className="w-full py-2.5 rounded-xl border border-gray-700 text-gray-400 hover:text-white text-sm">
           Esporta di nuovo con altre impostazioni
         </button>
@@ -817,9 +879,19 @@ function ExportPhase({ script, voiceoverFile, assignments, onBack }: {
         @keyframes capPop { 0% { transform: scale(.6); } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
         @keyframes capFade { 0% { opacity: 0; } 100% { opacity: 1; } }
         @keyframes capShake { 0% { transform: rotate(2deg); } 50% { transform: rotate(-2deg); } 100% { transform: rotate(0); } }
+        @keyframes capBounce { 0% { transform: scale(.3); } 60% { transform: scale(1.2); } 100% { transform: scale(1); } }
+        @keyframes capZoom { 0% { transform: scale(1.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+        @keyframes capTilt { 0% { transform: rotate(-8deg); opacity: 0; } 100% { transform: rotate(0); opacity: 1; } }
+        @keyframes capGlow { 0%,100% { filter: drop-shadow(0 0 2px #000); } 50% { filter: drop-shadow(0 0 10px currentColor); } }
+        @keyframes capSlidein { 0% { transform: scaleX(.8) scaleY(1.15); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
         .cap-pop { animation: capPop .25s ease-out; }
         .cap-fade { animation: capFade .3s ease-in; }
         .cap-shake { animation: capShake .2s ease-in-out; }
+        .cap-bounce { animation: capBounce .3s ease-out; }
+        .cap-zoom { animation: capZoom .25s ease-out; }
+        .cap-tilt { animation: capTilt .25s ease-out; }
+        .cap-glow { animation: capGlow .8s ease-in-out; }
+        .cap-slidein { animation: capSlidein .25s ease-out; }
       `}</style>
 
       {/* PREVIEW — anteprima caption sul b-roll */}
@@ -1154,7 +1226,234 @@ function ApiKeySetup({ onDone }: { onDone: () => void }) {
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 
+// ─── BATCH MODE: produci più video in sequenza ─────────────────────────────────
+
+interface BatchItem {
+  idea: string;
+  status: "queued" | "script" | "voice" | "broll" | "export" | "done" | "error";
+  videoUrl?: string;
+  filename?: string;
+  error?: string;
+}
+
+const BATCH_STEP_LABEL: Record<BatchItem["status"], string> = {
+  queued: "In attesa", script: "Scrivo script…", voice: "Genero voce…",
+  broll: "Cerco b-roll…", export: "Monto video…", done: "Pronto", error: "Errore",
+};
+
+function BatchPhase() {
+  const [ideasText, setIdeasText] = useState("");
+  const [style, setStyle] = useState("progetto_happiness");
+  const [duration, setDuration] = useState(45);
+  const [voices, setVoices] = useState<Voice[]>([]);
+  const [voiceId, setVoiceId] = useState("");
+  const [template, setTemplate] = useState("hormozi");
+  const [clipAnimation, setClipAnimation] = useState("zoomin");
+  const [autoChannel, setAutoChannel] = useState("");
+  const [items, setItems] = useState<BatchItem[]>([]);
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    fetch(`${SERVER}/api/studio/voices`).then(r => r.json())
+      .then(d => { if (Array.isArray(d)) { setVoices(d); if (d[0]) setVoiceId(d[0].id); } }).catch(() => {});
+  }, []);
+
+  const setItem = (i: number, patch: Partial<BatchItem>) =>
+    setItems(prev => prev.map((it, idx) => idx === i ? { ...it, ...patch } : it));
+
+  // Produce un singolo video: script → voce → broll → export (job) → opz. coda
+  const produceOne = async (idea: string, i: number): Promise<void> => {
+    const tpl = CAPTION_TEMPLATES.find(t => t.id === template) || CAPTION_TEMPLATES[0];
+    // 1. script
+    setItem(i, { status: "script" });
+    const sr = await fetch(`${SERVER}/api/studio/script`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idea, style, targetDuration: duration }),
+    });
+    const script = await sr.json();
+    if (!sr.ok) throw new Error(script.error || "script");
+    // 2. voiceover
+    setItem(i, { status: "voice" });
+    const vr = await fetch(`${SERVER}/api/studio/voiceover`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: script.fullScript, voiceId }),
+    });
+    const vo = await vr.json();
+    if (!vr.ok) throw new Error(vo.error || "voiceover");
+    // 3. broll per segmento
+    setItem(i, { status: "broll" });
+    const segments: { text: string; clipUrl: string }[] = [];
+    for (const seg of script.segments) {
+      let clipUrl = "";
+      try {
+        const br = await fetch(`${SERVER}/api/broll/search?q=${encodeURIComponent(seg.keyword)}&orientation=portrait&source=pexels&page=1`);
+        const bd = await br.json();
+        clipUrl = (bd.results || [])[0]?.download || "";
+      } catch {}
+      if (clipUrl) segments.push({ text: seg.text, clipUrl });
+    }
+    if (!segments.length) throw new Error("nessun b-roll trovato");
+    // 4. export (job in background)
+    setItem(i, { status: "export" });
+    const er = await fetch(`${SERVER}/api/studio/export`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        segments, voiceoverFile: vo.filename,
+        captions: true, captionStyle: tpl.style, captionPosition: tpl.position,
+        captionFont: tpl.font, wordsPerCaption: tpl.words, captionEffect: tpl.effect,
+        highlightWords: tpl.highlight, clipAnimation,
+      }),
+    });
+    const ex = await er.json();
+    if (!er.ok) throw new Error(ex.error || "export");
+    // 5. attendi il job export
+    const jobId = ex.jobId;
+    const result = await new Promise<{ url: string; filename: string }>((resolve, reject) => {
+      const poll = setInterval(async () => {
+        try {
+          const jr = await fetch(`${SERVER}/api/jobs/${jobId}`);
+          const job = await jr.json();
+          if (job.status === "done") { clearInterval(poll); resolve(job.result); }
+          else if (job.status === "error") { clearInterval(poll); reject(new Error(job.error || "export")); }
+        } catch {}
+      }, 1500);
+    });
+    // 6. opzionale: aggiungi alla coda canale
+    if (autoChannel) {
+      try {
+        await fetch(`${SERVER}/api/studio/to-queue`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename: result.filename, channel: autoChannel, title: script.hook || idea }),
+        });
+      } catch {}
+    }
+    setItem(i, { status: "done", videoUrl: result.url, filename: result.filename });
+  };
+
+  const start = async () => {
+    const ideas = ideasText.split("\n").map(s => s.trim()).filter(Boolean);
+    if (!ideas.length || !voiceId) return;
+    const init: BatchItem[] = ideas.map(idea => ({ idea, status: "queued" }));
+    setItems(init);
+    setRunning(true);
+    for (let i = 0; i < ideas.length; i++) {
+      try { await produceOne(ideas[i], i); }
+      catch (e) { setItem(i, { status: "error", error: e instanceof Error ? e.message : "errore" }); }
+    }
+    setRunning(false);
+  };
+
+  const doneCount = items.filter(i => i.status === "done").length;
+
+  return (
+    <div className="grid grid-cols-[1fr_1fr] gap-6">
+      {/* Setup */}
+      <div className="space-y-4">
+        <div>
+          <label className="text-xs text-gray-400 uppercase tracking-wider mb-2 block">Idee (una per riga)</label>
+          <textarea value={ideasText} onChange={e => setIdeasText(e.target.value)} rows={6} disabled={running}
+            placeholder={"Come risparmiare i primi 1000€\nLa disciplina batte la motivazione\n3 abitudini che cambiano la vita"}
+            className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-purple-500 resize-none" />
+          <div className="text-xs text-gray-600 mt-1">{ideasText.split("\n").filter(s => s.trim()).length} video da produrre</div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-gray-400 uppercase tracking-wider mb-1.5 block">Stile</label>
+            <select value={style} onChange={e => setStyle(e.target.value)} disabled={running}
+              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-purple-500">
+              {STYLES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 uppercase tracking-wider mb-1.5 block">Durata</label>
+            <select value={duration} onChange={e => setDuration(+e.target.value)} disabled={running}
+              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-purple-500">
+              {DURATIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 uppercase tracking-wider mb-1.5 block">Voce</label>
+            <select value={voiceId} onChange={e => setVoiceId(e.target.value)} disabled={running}
+              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-purple-500">
+              {voices.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 uppercase tracking-wider mb-1.5 block">Template caption</label>
+            <select value={template} onChange={e => setTemplate(e.target.value)} disabled={running}
+              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-purple-500">
+              {CAPTION_TEMPLATES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 uppercase tracking-wider mb-1.5 block">Animazione</label>
+            <select value={clipAnimation} onChange={e => setClipAnimation(e.target.value)} disabled={running}
+              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-purple-500">
+              {CLIP_ANIMATIONS.map(a => <option key={a.id} value={a.id}>{a.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 uppercase tracking-wider mb-1.5 block">Aggiungi a coda</label>
+            <select value={autoChannel} onChange={e => setAutoChannel(e.target.value)} disabled={running}
+              className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-purple-500">
+              <option value="">Solo export</option>
+              <option value="gurulandia">Gurulandia</option>
+              <option value="hvman">HVMAN</option>
+              <option value="moneycraft">Money Craft</option>
+            </select>
+          </div>
+        </div>
+
+        <button onClick={start} disabled={running || !ideasText.trim() || !voiceId}
+          className="w-full py-3 rounded-xl font-semibold bg-purple-600 text-white disabled:opacity-40 flex items-center justify-center gap-2">
+          {running ? <Loader size={14} className="animate-spin" /> : <Sparkles size={14} />}
+          {running ? `Produzione ${doneCount}/${items.length}…` : "Produci tutti i video"}
+        </button>
+        <div className="text-xs text-gray-600 text-center">I video vengono prodotti in sequenza. Non chiudere la pagina.</div>
+      </div>
+
+      {/* Stato */}
+      <div>
+        {items.length === 0 ? (
+          <div className="h-full min-h-64 flex items-center justify-center border-2 border-dashed border-gray-800 rounded-2xl">
+            <div className="text-center text-gray-600">
+              <Film size={32} className="mx-auto mb-3 opacity-30" />
+              <div className="text-sm">I video prodotti appariranno qui</div>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
+            {items.map((it, i) => (
+              <div key={i} className="bg-gray-900 border border-gray-800 rounded-xl p-3 flex items-center gap-3">
+                <div className="w-6 h-6 rounded-md bg-gray-800 flex items-center justify-center text-xs text-gray-500 flex-shrink-0">{i + 1}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-white truncate">{it.idea}</div>
+                  <div className={`text-xs mt-0.5 flex items-center gap-1.5 ${
+                    it.status === "done" ? "text-green-400" : it.status === "error" ? "text-red-400" : "text-purple-400"
+                  }`}>
+                    {it.status !== "done" && it.status !== "error" && it.status !== "queued" && <Loader size={10} className="animate-spin" />}
+                    {it.status === "done" && <Check size={11} />}
+                    {it.status === "error" && <AlertCircle size={11} />}
+                    {it.status === "error" ? it.error : BATCH_STEP_LABEL[it.status]}
+                  </div>
+                </div>
+                {it.status === "done" && it.videoUrl && (
+                  <a href={it.videoUrl} download className="text-xs text-purple-300 hover:text-white flex items-center gap-1 flex-shrink-0">
+                    <Download size={12} /> MP4
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Studio() {
+  const [mode, setMode] = useState<"single" | "batch">("single");
   const [step, setStep] = useState(0);
   const [maxStep, setMaxStep] = useState(0);
   const [scriptData, setScriptData] = useState<ScriptData | null>(null);
@@ -1190,14 +1489,27 @@ export default function Studio() {
       <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">Video Studio</h1>
-          <p className="text-gray-500 text-sm mt-1">Script → Voiceover → B-Roll → Export</p>
+          <p className="text-gray-500 text-sm mt-1">{mode === "single" ? "Script → Voiceover → B-Roll → Export" : "Produzione in serie di più video"}</p>
         </div>
-        <button onClick={() => setShowKeySetup(true)}
-          className="flex items-center gap-2 text-xs text-gray-500 hover:text-white px-3 py-2 rounded-lg hover:bg-gray-800 border border-gray-800">
-          <Key size={12} /> API Keys
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1 p-1 bg-gray-900 border border-gray-800 rounded-lg">
+            <button onClick={() => setMode("single")}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${mode === "single" ? "bg-purple-600 text-white" : "text-gray-400 hover:text-white"}`}>
+              Singolo
+            </button>
+            <button onClick={() => setMode("batch")}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${mode === "batch" ? "bg-purple-600 text-white" : "text-gray-400 hover:text-white"}`}>
+              Batch
+            </button>
+          </div>
+          <button onClick={() => setShowKeySetup(true)}
+            className="flex items-center gap-2 text-xs text-gray-500 hover:text-white px-3 py-2 rounded-lg hover:bg-gray-800 border border-gray-800">
+            <Key size={12} /> API Keys
+          </button>
+        </div>
       </div>
 
+      {mode === "batch" ? <BatchPhase /> : <>
       <StepBar step={step} maxStep={maxStep} onStep={goStep} />
 
       {step === 0 && (
@@ -1234,6 +1546,7 @@ export default function Studio() {
 
       {/* unused to avoid lint warning */}
       {voiceoverUrl && false && <span>{voiceoverUrl}</span>}
+      </>}
     </div>
   );
 }

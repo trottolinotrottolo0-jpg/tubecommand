@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./pages/Dashboard";
 import Analytics from "./pages/Analytics";
@@ -18,6 +18,16 @@ export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [activeChannel, setActiveChannel] = useState(0);
   const jobs = useJobs();
+
+  // Handoff tra pagine (es. "Crea nel Video Studio" da Trending → Big Ideas)
+  useEffect(() => {
+    const onGoto = (e: Event) => {
+      const dest = (e as CustomEvent).detail as Page;
+      if (dest) setPage(dest);
+    };
+    window.addEventListener("tubecommand:goto", onGoto);
+    return () => window.removeEventListener("tubecommand:goto", onGoto);
+  }, []);
 
   const ch = channels[activeChannel];
 

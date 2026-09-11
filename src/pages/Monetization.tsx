@@ -1,7 +1,126 @@
-import { useState } from "react";
-import { Calculator } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Calculator, Plus, Trash2, Copy, Check, Tag } from "lucide-react";
 import type { ChannelData } from "../hooks/useChannels";
 import CalcDrawer from "../components/CalcDrawer";
+
+const SERVER = import.meta.env.VITE_SERVER_URL || "http://localhost:3001";
+
+interface Product { id: string; name: string; url: string; created: string; }
+
+function buildTrackedLink(baseUrl: string, campaign: string, content: string): string {
+  try {
+    const u = new URL(baseUrl);
+    u.searchParams.set("utm_source", "youtube");
+    u.searchParams.set("utm_medium", "description");
+    u.searchParams.set("utm_campaign", campaign);
+    if (content.trim()) u.searchParams.set("utm_content", content.trim().replace(/\s+/g, "-").toLowerCase());
+    return u.toString();
+  } catch { return baseUrl; }
+}
+
+function DigitalProducts({ channels }: { channels: ChannelData[] }) {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [tag, setTag] = useState("");
+  const [err, setErr] = useState("");
+  const [copied, setCopied] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(`${SERVER}/api/products`);
+      const d = await r.json();
+      setProducts(d.products || []);
+    } catch { /* server offline */ }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const add = async () => {
+    setErr("");
+    try {
+      const r = await fetch(`${SERVER}/api/products`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, url }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      setName(""); setUrl(""); load();
+    } catch (e) { setErr(e instanceof Error ? e.message : "Errore"); }
+  };
+
+  const del = async (id: string) => {
+    if (!confirm("Eliminare questo prodotto?")) return;
+    await fetch(`${SERVER}/api/products/${id}`, { method: "DELETE" });
+    load();
+  };
+
+  const copy = (link: string, key: string) => {
+    navigator.clipboard.writeText(link);
+    setCopied(key); setTimeout(() => setCopied(""), 1500);
+  };
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 mb-6">
+      <div className="flex items-center gap-2 mb-1">
+        <Tag size={16} className="text-emerald-400" />
+        <h2 className="text-lg font-bold text-white">Prodotti Digitali</h2>
+      </div>
+      <p className="text-gray-500 text-xs mb-4">Aggiungi il prodotto + il link del tuo store. L'app genera link tracciati (UTM) per canale, da mettere nelle descrizioni. Le vendite le tracci sul tuo sito/Stripe leggendo i parametri utm.</p>
+
+      {/* Form aggiunta */}
+      <div className="grid grid-cols-[1fr_1.4fr_auto] gap-2 mb-3">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Nome prodotto (es. Guida PDF)"
+          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+        <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://tuosito.com/prodotto"
+          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+        <button onClick={add} disabled={!name.trim() || !url.trim()}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-40"
+          style={{ background: "#10b981" }}>
+          <Plus size={14} /> Aggiungi
+        </button>
+      </div>
+      {err && <div className="text-xs text-red-400 mb-3">{err}</div>}
+
+      {/* Tag opzionale per video/campagna */}
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-xs text-gray-500">Tag video/campagna (opzionale):</span>
+        <input value={tag} onChange={e => setTag(e.target.value)} placeholder="es. coccodrilli-agosto"
+          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none focus:border-emerald-500 flex-1 max-w-xs" />
+      </div>
+
+      {/* Lista prodotti */}
+      {products.length === 0 && <div className="text-gray-600 text-sm py-4 text-center">Nessun prodotto. Aggiungine uno sopra.</div>}
+      <div className="space-y-4">
+        {products.map(p => (
+          <div key={p.id} className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="font-semibold text-white text-sm">{p.name}</div>
+              <button onClick={() => del(p.id)} className="text-gray-500 hover:text-red-400"><Trash2 size={14} /></button>
+            </div>
+            <div className="space-y-2">
+              {channels.map(ch => {
+                const campaign = (ch.handle || "canale").replace(/^@/, "");
+                const link = buildTrackedLink(p.url, campaign, tag);
+                const key = `${p.id}_${campaign}`;
+                return (
+                  <div key={key} className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400 w-32 truncate">{ch.label || campaign}</span>
+                    <code className="flex-1 text-[11px] text-emerald-300 bg-gray-900 rounded px-2 py-1.5 truncate">{link}</code>
+                    <button onClick={() => copy(link, key)}
+                      className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-700">
+                      {copied === key ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                      {copied === key ? "Copiato" : "Copia"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 // YouTube Partner Program requirements
 const YPP_SUBS = 1000;
@@ -262,6 +381,52 @@ interface Props {
   channels: ChannelData[];
 }
 
+interface Promo { enabled: boolean; inDescription: boolean; asComment: boolean; text: string; }
+
+function PromoGuide() {
+  const [promo, setPromo] = useState<Promo>({ enabled: false, inDescription: true, asComment: true, text: "" });
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    fetch(`${SERVER}/api/promo`).then(r => r.json()).then(setPromo).catch(() => {});
+  }, []);
+  const save = async () => {
+    await fetch(`${SERVER}/api/promo`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(promo),
+    });
+    setSaved(true); setTimeout(() => setSaved(false), 1500);
+  };
+  const set = (k: keyof Promo, v: boolean | string) => setPromo(p => ({ ...p, [k]: v }));
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 mb-6">
+      <div className="flex items-center justify-between mb-1">
+        <h2 className="text-lg font-bold text-white">📢 Promo Guida (descrizione + primo commento)</h2>
+        <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+          <input type="checkbox" checked={promo.enabled} onChange={e => set("enabled", e.target.checked)} />
+          Attiva
+        </label>
+      </div>
+      <p className="text-gray-500 text-xs mb-3">Questo testo (con il link alla guida) viene aggiunto automaticamente a OGNI prossimo video. Scrivilo una volta.</p>
+      <textarea value={promo.text} onChange={e => set("text", e.target.value)} rows={4}
+        placeholder={"🚀 La mia guida per esplodere il tuo canale a 1,5M di views nel primo mese:\nhttps://creatoraihub.store/products/ai-youtube-blueprint?utm_source=youtube&utm_campaign=..."}
+        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500 resize-none mb-3" />
+      <div className="flex items-center gap-4 mb-3 text-xs text-gray-300">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={promo.inDescription} onChange={e => set("inDescription", e.target.checked)} /> In ogni descrizione
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={promo.asComment} onChange={e => set("asComment", e.target.checked)} /> Come primo commento
+        </label>
+      </div>
+      <div className="flex items-center gap-3">
+        <button onClick={save} className="px-4 py-2 rounded-lg text-sm font-semibold text-white" style={{ background: "#10b981" }}>
+          {saved ? "✓ Salvato" : "Salva"}
+        </button>
+        {promo.asComment && <span className="text-[11px] text-amber-400">⚠️ Per il commento automatico devi riconnettere i canali una volta (nuovo permesso). Il "pin" del commento va fatto a mano su YouTube.</span>}
+      </div>
+    </div>
+  );
+}
+
 export default function Monetization({ channels }: Props) {
   const [drawerChannel, setDrawerChannel] = useState<ChannelData | null>(null);
 
@@ -294,6 +459,12 @@ export default function Monetization({ channels }: Props) {
           </div>
         </div>
       </div>
+
+      {/* Promo guida automatica in descrizione + primo commento */}
+      <PromoGuide />
+
+      {/* Prodotti digitali + link tracciati */}
+      <DigitalProducts channels={channels} />
 
       <div className="space-y-6">
         {channels.map((ch) => (

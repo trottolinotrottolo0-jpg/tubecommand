@@ -550,7 +550,7 @@ const HOOKS_EN = [
   (k: string) => `"In this video I expose the dark side of ${k} nobody shows you."`,
 ];
 
-export async function generateTitleIdeas(keyword: string, _niche: string, language: string): Promise<TitleIdea[]> {
+function templateTitleIdeas(keyword: string, language: string): TitleIdea[] {
   const isEn = language.toLowerCase().includes("english");
   const pool = isEn ? ANGLES_EN : ANGLES;
   const hookPool = isEn ? HOOKS_EN : HOOKS_IT;
@@ -561,6 +561,26 @@ export async function generateTitleIdeas(keyword: string, _niche: string, langua
   }));
 }
 
+export async function generateTitleIdeas(keyword: string, _niche: string, language: string, channel?: string, videoType?: string): Promise<TitleIdea[]> {
+  // Prova la generazione AI (titoli accattivanti, locale/gratis lato server). Fallback ai template se non disponibile.
+  try {
+    const res = await fetch(`${import.meta.env.VITE_SERVER_URL || "http://localhost:3001"}/api/titles/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: keyword, channel, videoType }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.titles) && data.titles.length) {
+        return data.titles as TitleIdea[];
+      }
+    }
+  } catch {
+    // rete/server non disponibile → fallback locale
+  }
+  return templateTitleIdeas(keyword, language);
+}
+
 export interface SourceVideoContext {
   title: string;
   description: string;
@@ -568,7 +588,7 @@ export interface SourceVideoContext {
   tags: string[];
 }
 
-export async function generateSEOPackage(title: string, niche: string, language: string, sourceVideo?: SourceVideoContext, channel?: string): Promise<SEOPackage> {
+export async function generateSEOPackage(title: string, niche: string, language: string, sourceVideo?: SourceVideoContext, channel?: string, videoType?: string): Promise<SEOPackage> {
   const isEn = language.toLowerCase().includes("english");
   const nicheWords = niche.toLowerCase().split(/[\s/,]+/).filter(Boolean);
 
@@ -621,7 +641,7 @@ export async function generateSEOPackage(title: string, niche: string, language:
     const res = await fetch(`${import.meta.env.VITE_SERVER_URL || "http://localhost:3001"}/api/seo/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, channel: channel || "gurulandia", sourceVideo }),
+      body: JSON.stringify({ title, channel: channel || "gurulandia", sourceVideo, videoType }),
     });
     if (res.ok) return await res.json();
   } catch { /* fallback to template */ }
